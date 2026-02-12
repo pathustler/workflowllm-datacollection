@@ -77,7 +77,7 @@ def collect_manuals_from_product(product):
 # 4. full crawl
 def crawl_everything():
     all_manuals = {}
-    brands = collect_brands()[:1]
+    brands = collect_brands()
 
     for brand in tqdm(brands, desc="Brands"):
         products = collect_products(brand)
