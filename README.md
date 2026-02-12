@@ -47,7 +47,14 @@ The crawler collects **automation task metadata** from RoutineHub.
 Due to paywalls, most workflows are not downloadable; this is expected and handled later via synthesis.
 
 ```
-python3 crawl/crawl_routinehub.py
+python3 crawl/collect_manuals.py
+python3 crawl/manualslib_list.py
 ```
 
-This script scrapes RoutineHub for publicly available shortcuts and saves the metadata to `raw_shortcuts.json`.
+This script scrapes ManualsLib for publicly available manual sections and saves the metadata to `portable_generator_toc_sections.json`.
+
+
+```
+python3 exapand/manualslib_expand.py
+```
+This script processes the collected pdf data, extracts actionable workflows, and saves them to `portable_generator_workflows.json`.
