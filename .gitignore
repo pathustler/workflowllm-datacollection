@@ -1,0 +1,8 @@
+manualslib_all_manuals.json
+manualslib_all_manuals.json
+.venv/
+__pycache__/
+*.pyc
+data/
+*.json
+.env
