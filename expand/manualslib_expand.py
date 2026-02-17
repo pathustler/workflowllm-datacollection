@@ -3,8 +3,17 @@ import requests
 from bs4 import BeautifulSoup
 import re
 from tqdm import tqdm
+import argparse
+import os
+import time
 
 
+OUTPUT_FILE = "portable_generator_workflows.json"
+
+
+# -----------------------------
+# Utilities
+# -----------------------------
 def parse_style(style: str) -> dict:
     out = {}
     for part in style.split(";"):
@@ -14,9 +23,16 @@ def parse_style(style: str) -> dict:
     return out
 
 
+# -----------------------------
+# Extraction
+# -----------------------------
 def extract_steps_from_manual_page(url: str) -> list[str]:
-    r = requests.get(url, timeout=30)
-    r.raise_for_status()
+    try:
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"⚠️ Failed fetching {url}")
+        return []
 
     soup = BeautifulSoup(r.text, "html.parser")
     pdf = soup.select_one("div.pdf")
@@ -40,22 +56,18 @@ def extract_steps_from_manual_page(url: str) -> list[str]:
             "font": int(style_data.get("font-size", 16)),
         })
 
-    # reading order
     blocks.sort(key=lambda b: (b["top"], b["left"]))
 
     steps = []
     for b in blocks:
         t = b["text"]
 
-        # skip headers / titles
         if b["font"] >= 24:
             continue
 
-        # skip pure table data
         if re.match(r"^[0-9.,/]+$", t):
             continue
 
-        # keep instructional / descriptive lines
         if len(t) >= 20:
             steps.append(t)
 
@@ -73,27 +85,76 @@ def toc_entry_to_workflow(entry: dict) -> dict:
     }
 
 
-if __name__ == "__main__":
+# -----------------------------
+# MAIN
+# -----------------------------
+def main(start_index: int):
     with open("portable_generator_toc_sections.json") as f:
         toc_entries = json.load(f)
 
-    workflows = []
+    total = len(toc_entries)
 
-    for entry in tqdm(toc_entries, desc="Extracting workflows"):
-        # skip non-actionable sections early
+    # Load existing checkpoint if available
+    if os.path.exists(OUTPUT_FILE):
+        with open(OUTPUT_FILE) as f:
+            workflows = json.load(f)
+        print(f"✓ Loaded {len(workflows)} existing workflows")
+    else:
+        workflows = []
+
+    # Avoid duplicate processing
+    processed_urls = {w["source_url"] for w in workflows}
+
+    print(f"Starting from index: {start_index}")
+
+    for idx in range(start_index, total):
+        entry = toc_entries[idx]
+
+        print(f"\n[{idx+1}/{total}] Processing: {entry['title']}")
+
+        # Skip non-actionable sections
         if entry["title"].lower() in {
             "table of contents",
             "certifications and specifications",
             "certifications"
         }:
+            print("→ Skipped (non-actionable)")
             continue
+
+        # if entry["source_url"] in processed_urls:
+        #     print("→ Already processed, skipping")
+        #     continue
 
         workflow = toc_entry_to_workflow(entry)
 
         if workflow["steps"]:
             workflows.append(workflow)
+            processed_urls.add(workflow["source_url"])
 
-    with open("portable_generator_workflows.json", "w") as f:
-        json.dump(workflows, f, indent=2, ensure_ascii=False)
+            # 🔥 Save checkpoint immediately
+            with open(OUTPUT_FILE, "w") as f:
+                json.dump(workflows, f, indent=2, ensure_ascii=False)
 
-    print(f"✓ Extracted {len(workflows)} workflows")
+            print("✓ Checkpoint saved")
+        else:
+            print("→ No steps extracted")
+
+        time.sleep(0.3)  # polite delay
+
+    print(f"\n✅ Done. Total workflows: {len(workflows)}")
+
+
+# -----------------------------
+# CLI ENTRY
+# -----------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--start",
+        type=int,
+        default=0,
+        help="Start from nth TOC entry index"
+    )
+    args = parser.parse_args()
+
+    main(args.start)
