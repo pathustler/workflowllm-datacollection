@@ -2,13 +2,18 @@ import json
 import requests
 from bs4 import BeautifulSoup
 import re
-from tqdm import tqdm
 import argparse
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 
 OUTPUT_FILE = "portable_generator_workflows.json"
+CONCURRENCY = 10
+SAVE_EVERY = 10
+
+save_lock = Lock()
 
 
 # -----------------------------
@@ -26,12 +31,31 @@ def parse_style(style: str) -> dict:
 # -----------------------------
 # Extraction
 # -----------------------------
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0"
+})
+
+
 def extract_steps_from_manual_page(url: str) -> list[str]:
-    try:
-        r = requests.get(url, timeout=30)
-        r.raise_for_status()
-    except Exception as e:
-        print(f"⚠️ Failed fetching {url}")
+    for attempt in range(5):
+        try:
+            r = session.get(url, timeout=30)
+
+            if r.status_code == 200:
+                break
+
+            if r.status_code in [403, 429]:
+                print(f"⚠️ Rate limited ({r.status_code}) — backing off...")
+                time.sleep(2 ** attempt)
+                continue
+
+            return []
+
+        except Exception:
+            time.sleep(2 ** attempt)
+    else:
+        print(f"❌ Permanent failure: {url}")
         return []
 
     soup = BeautifulSoup(r.text, "html.parser")
@@ -74,8 +98,18 @@ def extract_steps_from_manual_page(url: str) -> list[str]:
     return steps
 
 
-def toc_entry_to_workflow(entry: dict) -> dict:
+def process_entry(entry):
+    if entry["title"].lower() in {
+        "table of contents",
+        "certifications and specifications",
+        "certifications"
+    }:
+        return None
+
     steps = extract_steps_from_manual_page(entry["source_url"])
+
+    if not steps:
+        return None
 
     return {
         "workflow_name": f'{entry["title"]} – {entry["manual_name"]}',
@@ -88,60 +122,91 @@ def toc_entry_to_workflow(entry: dict) -> dict:
 # -----------------------------
 # MAIN
 # -----------------------------
+from time import perf_counter
+
+
 def main(start_index: int):
+
     with open("portable_generator_toc_sections.json") as f:
         toc_entries = json.load(f)
 
+    toc_entries = toc_entries[start_index:]
     total = len(toc_entries)
 
-    # Load existing checkpoint if available
+    # Load checkpoint
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE) as f:
             workflows = json.load(f)
-        print(f"✓ Loaded {len(workflows)} existing workflows")
     else:
         workflows = []
 
-    # Avoid duplicate processing
     processed_urls = {w["source_url"] for w in workflows}
 
     print(f"Starting from index: {start_index}")
+    print(f"Running with {CONCURRENCY} concurrent workers...\n")
 
-    for idx in range(start_index, total):
-        entry = toc_entries[idx]
+    start_time = perf_counter()
 
-        print(f"\n[{idx+1}/{total}] Processing: {entry['title']}")
+    completed = 0
+    failures = 0
 
-        # Skip non-actionable sections
-        if entry["title"].lower() in {
-            "table of contents",
-            "certifications and specifications",
-            "certifications"
-        }:
-            print("→ Skipped (non-actionable)")
-            continue
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
 
-        # if entry["source_url"] in processed_urls:
-        #     print("→ Already processed, skipping")
-        #     continue
+        futures = [
+            executor.submit(process_entry, entry)
+            for entry in toc_entries
+            if entry["source_url"] not in processed_urls
+        ]
 
-        workflow = toc_entry_to_workflow(entry)
+        total_tasks = len(futures)
 
-        if workflow["steps"]:
-            workflows.append(workflow)
-            processed_urls.add(workflow["source_url"])
+        for i, future in enumerate(as_completed(futures), 1):
+            result = future.result()
 
-            # 🔥 Save checkpoint immediately
-            with open(OUTPUT_FILE, "w") as f:
-                json.dump(workflows, f, indent=2, ensure_ascii=False)
+            if result:
+                workflows.append(result)
+                processed_urls.add(result["source_url"])
+            else:
+                failures += 1
 
-            print("✓ Checkpoint saved")
-        else:
-            print("→ No steps extracted")
+            completed += 1
 
-        time.sleep(0.3)  # polite delay
+            # Stopwatch
+            elapsed = perf_counter() - start_time
+            hrs = int(elapsed // 3600)
+            mins = int((elapsed % 3600) // 60)
+            secs = int(elapsed % 60)
 
-    print(f"\n✅ Done. Total workflows: {len(workflows)}")
+            # Progress %
+            percent = (completed / total_tasks) * 100
+
+            # Single-line overwrite
+            print(
+                f"\rProgress: {completed}/{total_tasks} "
+                f"({percent:5.1f}%) | "
+                f"Workflows: {len(workflows)} | "
+                f"Failures: {failures} | "
+                f"Elapsed: {hrs:02d}:{mins:02d}:{secs:02d}",
+                end="",
+                flush=True
+            )
+
+            # Save checkpoint
+            if completed % SAVE_EVERY == 0:
+                with save_lock:
+                    with open(OUTPUT_FILE, "w") as f:
+                        json.dump(workflows, f, indent=2, ensure_ascii=False)
+
+    # Final save
+    with open(OUTPUT_FILE, "w") as f:
+        json.dump(workflows, f, indent=2, ensure_ascii=False)
+
+    total_elapsed = perf_counter() - start_time
+
+    print("\n\n✅ Done.")
+    print(f"Total workflows: {len(workflows)}")
+    print(f"Total time: {total_elapsed:.2f} seconds")
+
 
 
 # -----------------------------
