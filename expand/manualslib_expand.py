@@ -5,15 +5,24 @@ import re
 import argparse
 import os
 import time
+import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+from time import perf_counter
 
 
 OUTPUT_FILE = "portable_generator_workflows.json"
-CONCURRENCY = 10
+CONCURRENCY = 4  # lower for HPC stability
 SAVE_EVERY = 10
 
 save_lock = Lock()
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "close",
+}
 
 
 # -----------------------------
@@ -31,31 +40,30 @@ def parse_style(style: str) -> dict:
 # -----------------------------
 # Extraction
 # -----------------------------
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0"
-})
-
-
 def extract_steps_from_manual_page(url: str) -> list[str]:
+
     for attempt in range(5):
+
+        # jitter delay (important)
+        time.sleep(random.uniform(0.3, 1.0))
+
         try:
-            r = session.get(url, timeout=30)
+            r = requests.get(url, headers=HEADERS, timeout=30)
 
             if r.status_code == 200:
                 break
 
-            if r.status_code in [403, 429]:
-                print(f"⚠️ Rate limited ({r.status_code}) — backing off...")
-                time.sleep(2 ** attempt)
+            if r.status_code in [403, 429, 503]:
+                # exponential backoff
+                time.sleep(3 * (attempt + 1))
                 continue
 
             return []
 
         except Exception:
             time.sleep(2 ** attempt)
+
     else:
-        print(f"❌ Permanent failure: {url}")
         return []
 
     soup = BeautifulSoup(r.text, "html.parser")
@@ -99,6 +107,7 @@ def extract_steps_from_manual_page(url: str) -> list[str]:
 
 
 def process_entry(entry):
+
     if entry["title"].lower() in {
         "table of contents",
         "certifications and specifications",
@@ -122,18 +131,13 @@ def process_entry(entry):
 # -----------------------------
 # MAIN
 # -----------------------------
-from time import perf_counter
-
-
 def main(start_index: int):
 
     with open("portable_generator_toc_sections.json") as f:
         toc_entries = json.load(f)
 
     toc_entries = toc_entries[start_index:]
-    total = len(toc_entries)
 
-    # Load checkpoint
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE) as f:
             workflows = json.load(f)
@@ -143,7 +147,7 @@ def main(start_index: int):
     processed_urls = {w["source_url"] for w in workflows}
 
     print(f"Starting from index: {start_index}")
-    print(f"Running with {CONCURRENCY} concurrent workers...\n")
+    print(f"Running with {CONCURRENCY} workers...\n")
 
     start_time = perf_counter()
 
@@ -160,7 +164,7 @@ def main(start_index: int):
 
         total_tasks = len(futures)
 
-        for i, future in enumerate(as_completed(futures), 1):
+        for future in as_completed(futures):
             result = future.result()
 
             if result:
@@ -171,16 +175,13 @@ def main(start_index: int):
 
             completed += 1
 
-            # Stopwatch
             elapsed = perf_counter() - start_time
             hrs = int(elapsed // 3600)
             mins = int((elapsed % 3600) // 60)
             secs = int(elapsed % 60)
 
-            # Progress %
             percent = (completed / total_tasks) * 100
 
-            # Single-line overwrite
             print(
                 f"\rProgress: {completed}/{total_tasks} "
                 f"({percent:5.1f}%) | "
@@ -191,22 +192,16 @@ def main(start_index: int):
                 flush=True
             )
 
-            # Save checkpoint
             if completed % SAVE_EVERY == 0:
                 with save_lock:
                     with open(OUTPUT_FILE, "w") as f:
                         json.dump(workflows, f, indent=2, ensure_ascii=False)
 
-    # Final save
     with open(OUTPUT_FILE, "w") as f:
         json.dump(workflows, f, indent=2, ensure_ascii=False)
 
-    total_elapsed = perf_counter() - start_time
-
     print("\n\n✅ Done.")
     print(f"Total workflows: {len(workflows)}")
-    print(f"Total time: {total_elapsed:.2f} seconds")
-
 
 
 # -----------------------------
