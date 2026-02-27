@@ -1,33 +1,29 @@
-import json
-import requests
-from bs4 import BeautifulSoup
-import re
-import argparse
 import os
-import time
-import random
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
-from time import perf_counter
+import re
+import json
+import argparse
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
+from tqdm import tqdm
 
 
 OUTPUT_FILE = "portable_generator_workflows.json"
-CONCURRENCY = 4  # lower for HPC stability
-SAVE_EVERY = 10
+SAVE_BATCH = 500        # Save every N entries
+JPEG_QUALITY = 70      # 60–75 is ideal balance
+VIEWPORT = {"width": 1600, "height": 3000}
 
-save_lock = Lock()
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "close",
-}
+successful_screenshots = 0
 
 
-# -----------------------------
+# -------------------------------------------------
 # Utilities
-# -----------------------------
+# -------------------------------------------------
+
+def safe_name(text: str) -> str:
+    text = re.sub(r"[^\w\s-]", "", text)
+    return re.sub(r"\s+", "_", text.strip())
+
+
 def parse_style(style: str) -> dict:
     out = {}
     for part in style.split(";"):
@@ -37,36 +33,12 @@ def parse_style(style: str) -> dict:
     return out
 
 
-# -----------------------------
-# Extraction
-# -----------------------------
-def extract_steps_from_manual_page(url: str) -> list[str]:
+# -------------------------------------------------
+# HTML → Steps Extraction (NO extra network call)
+# -------------------------------------------------
 
-    for attempt in range(5):
-
-        # jitter delay (important)
-        time.sleep(random.uniform(0.3, 1.0))
-
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=30)
-
-            if r.status_code == 200:
-                break
-
-            if r.status_code in [403, 429, 503]:
-                # exponential backoff
-                time.sleep(3 * (attempt + 1))
-                continue
-
-            return []
-
-        except Exception:
-            time.sleep(2 ** attempt)
-
-    else:
-        return []
-
-    soup = BeautifulSoup(r.text, "html.parser")
+def extract_steps_from_html(html: str):
+    soup = BeautifulSoup(html, "html.parser")
     pdf = soup.select_one("div.pdf")
     if not pdf:
         return []
@@ -96,42 +68,21 @@ def extract_steps_from_manual_page(url: str) -> list[str]:
 
         if b["font"] >= 24:
             continue
-
         if re.match(r"^[0-9.,/]+$", t):
             continue
-
         if len(t) >= 20:
             steps.append(t)
 
     return steps
 
 
-def process_entry(entry):
-
-    if entry["title"].lower() in {
-        "table of contents",
-        "certifications and specifications",
-        "certifications"
-    }:
-        return None
-
-    steps = extract_steps_from_manual_page(entry["source_url"])
-
-    if not steps:
-        return None
-
-    return {
-        "workflow_name": f'{entry["title"]} – {entry["manual_name"]}',
-        "steps": steps,
-        "source": "ManualsLib",
-        "source_url": entry["source_url"]
-    }
-
-
-# -----------------------------
+# -------------------------------------------------
 # MAIN
-# -----------------------------
+# -------------------------------------------------
+
 def main(start_index: int):
+
+    global successful_screenshots
 
     with open("portable_generator_toc_sections.json") as f:
         toc_entries = json.load(f)
@@ -144,77 +95,112 @@ def main(start_index: int):
     else:
         workflows = []
 
-    processed_urls = {w["source_url"] for w in workflows}
+    processed = {w["source_url"] for w in workflows}
+    entries = [e for e in toc_entries if e["source_url"] not in processed]
 
-    print(f"Starting from index: {start_index}")
-    print(f"Running with {CONCURRENCY} workers...\n")
+    print(f"Processing {len(entries)} remaining pages")
 
-    start_time = perf_counter()
+    with sync_playwright() as p:
 
-    completed = 0
-    failures = 0
+        # 🔥 SINGLE BROWSER
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox"]
+        )
 
-    with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+        context = browser.new_context(viewport=VIEWPORT)
 
-        futures = [
-            executor.submit(process_entry, entry)
-            for entry in toc_entries
-            if entry["source_url"] not in processed_urls
-        ]
+        # Allow images but block heavy junk
+        context.route("**/*", lambda route, request:
+            route.abort()
+            if request.resource_type in ["font", "media"]
+            else route.continue_()
+        )
 
-        total_tasks = len(futures)
+        # 🔥 SINGLE REUSED PAGE
+        page = context.new_page()
 
-        for future in as_completed(futures):
-            result = future.result()
+        for i, entry in enumerate(tqdm(entries)):
 
-            if result:
-                workflows.append(result)
-                processed_urls.add(result["source_url"])
-            else:
-                failures += 1
+            try:
+                page.goto(entry["source_url"], wait_until="domcontentloaded")
 
-            completed += 1
+                # Wait only for the PDF container
+                page.wait_for_selector("div.pdf", timeout=15000)
 
-            elapsed = perf_counter() - start_time
-            hrs = int(elapsed // 3600)
-            mins = int((elapsed % 3600) // 60)
-            secs = int(elapsed % 60)
+                # Scroll once to trigger lazy image loads
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                page.wait_for_timeout(300)
 
-            percent = (completed / total_tasks) * 100
+                html = page.content()
+                steps = extract_steps_from_html(html)
 
-            print(
-                f"\rProgress: {completed}/{total_tasks} "
-                f"({percent:5.1f}%) | "
-                f"Workflows: {len(workflows)} | "
-                f"Failures: {failures} | "
-                f"Elapsed: {hrs:02d}:{mins:02d}:{secs:02d}",
-                end="",
-                flush=True
-            )
+                if not steps:
+                    continue
 
-            if completed % SAVE_EVERY == 0:
-                with save_lock:
+                brand = safe_name(entry["brand"])
+                product = safe_name(entry["product"])
+                model = safe_name(entry["model"])
+                manual_word = safe_name(entry["manual_name"].split()[0])
+                title = safe_name(entry["title"])
+
+                image_path = os.path.join(
+                    "ManualsLib_Screenshots",
+                    brand,
+                    product,
+                    model,
+                    manual_word,
+                    f"{title}.jpg"
+                )
+
+                os.makedirs(os.path.dirname(image_path), exist_ok=True)
+
+                element = page.query_selector("div.pdf")
+                if element:
+                    element.screenshot(
+                        path=image_path,
+                        type="jpeg",
+                        quality=JPEG_QUALITY
+                    )
+                    successful_screenshots += 1
+
+                workflows.append({
+                    "workflow_name": f'{entry["title"]} – {entry["manual_name"]}',
+                    "steps": steps,
+                    "manual_name": entry["manual_name"],
+                    "brand": entry["brand"],
+                    "product": entry["product"],
+                    "model": entry["model"],
+                    "manual_title": entry["manual_title"],
+                    "source_url": entry["source_url"]
+                })
+
+                # 🔥 Batch save (critical for performance)
+                if i % SAVE_BATCH == 0:
                     with open(OUTPUT_FILE, "w") as f:
-                        json.dump(workflows, f, indent=2, ensure_ascii=False)
+                        json.dump(workflows, f)
+
+            except KeyboardInterrupt:
+                print("\nInterrupted by user. Saving progress...")
+                break
+            except:
+                continue
+
+        browser.close()
 
     with open(OUTPUT_FILE, "w") as f:
-        json.dump(workflows, f, indent=2, ensure_ascii=False)
+        json.dump(workflows, f)
 
-    print("\n\n✅ Done.")
-    print(f"Total workflows: {len(workflows)}")
+    print(f"\nDone. Screenshots saved: {successful_screenshots}")
 
 
-# -----------------------------
-# CLI ENTRY
-# -----------------------------
+# -------------------------------------------------
+# CLI
+# -------------------------------------------------
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--start",
-        type=int,
-        default=0,
-        help="Start from nth TOC entry index"
-    )
+    parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
 
     main(args.start)

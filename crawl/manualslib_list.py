@@ -46,7 +46,12 @@ def extract_toc(manual):
         sections.append({
             "title": title,
             "source_url": f"{base_url}?page={page}#manual",
-            "manual_name": f"{manual['model']} – {manual['manual_title']}"
+            "manual_name": f"{manual['model']} – {manual['manual_title']}",
+            "brand": manual["brand"],
+            "product": manual["product"],
+            "model": manual["model"],
+            "manual_title": manual["manual_title"],
+        
         })
 
     return sections
@@ -66,7 +71,7 @@ def main(start_index: int):
         print(f"✓ Loaded {len(all_sections)} existing TOC entries")
     else:
         all_sections = []
-
+ 
     processed_manuals = set(
         s["manual_name"] for s in all_sections
     )
