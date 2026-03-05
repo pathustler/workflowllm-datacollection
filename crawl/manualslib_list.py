@@ -11,6 +11,12 @@ import time
 BASE = "https://www.manualslib.com"
 OUTPUT_FILE = "portable_generator_toc_sections.json"
 
+PROXY = "http://adgkwbzb:43oaua4v9w5g@31.59.20.176:6754"
+
+PROXIES = {
+    "http": PROXY,
+    "https": PROXY
+}
 
 # -----------------------------
 # URL Cleaner
@@ -25,7 +31,7 @@ def clean_manual_base_url(url: str) -> str:
 # -----------------------------
 def extract_toc(manual):
     try:
-        r = requests.get(manual["manual_url"], timeout=30)
+        r = requests.get(manual["manual_url"], timeout=30,  proxies=PROXIES)
         r.raise_for_status()
     except Exception as e:
         print(f"⚠️ Failed: {manual['manual_url']}")
