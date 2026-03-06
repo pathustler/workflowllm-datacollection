@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urlunparse
 import argparse
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 BASE = "https://www.manualslib.com"
@@ -29,7 +30,7 @@ HEADERS = {
 # -----------------------------
 # URL Cleaner
 # -----------------------------
-def clean_manual_base_url(url: str) -> str:
+def clean_manual_base_url(url: str):
     parsed = urlparse(url)
     return urlunparse(parsed._replace(query="", fragment=""))
 
@@ -39,11 +40,11 @@ def clean_manual_base_url(url: str) -> str:
 # -----------------------------
 def extract_toc(manual):
     try:
-        r = requests.get(manual["manual_url"], timeout=30,  headers=HEADERS)
+        r = requests.get(manual["manual_url"], timeout=30, headers=HEADERS)
         r.raise_for_status()
-    except Exception as e:
+    except Exception:
         print(f"⚠️ Failed: {manual['manual_url']}")
-        return []
+        return manual, []
 
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -65,59 +66,62 @@ def extract_toc(manual):
             "product": manual["product"],
             "model": manual["model"],
             "manual_title": manual["manual_title"],
-        
         })
 
-    return sections
+    return manual, sections
 
 
 # -----------------------------
 # MAIN
 # -----------------------------
 def main(start_index: int):
+
     manuals = json.load(open("manualslib_all_manuals.json"))
     total = len(manuals)
 
-    # Load checkpoint if exists
     if os.path.exists(OUTPUT_FILE):
         with open(OUTPUT_FILE) as f:
             all_sections = json.load(f)
         print(f"✓ Loaded {len(all_sections)} existing TOC entries")
     else:
         all_sections = []
- 
+
     processed_manuals = set(
         s["manual_name"] for s in all_sections
     )
 
     print(f"Starting from manual index: {start_index}")
 
+    manuals_to_process = []
+
     for idx in range(start_index, total):
         manual = manuals[idx]
-
         manual_name = f"{manual['model']} – {manual['manual_title']}"
 
-        print(f"\n[{idx+1}/{total}] Processing: {manual_name}")
-
         if manual_name in processed_manuals:
-            print("→ Already processed, skipping")
             continue
 
-        sections = extract_toc(manual)
+        manuals_to_process.append(manual)
 
-        if sections:
-            all_sections.extend(sections)
-            processed_manuals.add(manual_name)
+    # parallel scraping
+    with ThreadPoolExecutor(max_workers=3) as executor:
 
-            # 🔥 Save checkpoint immediately
-            with open(OUTPUT_FILE, "w") as f:
-                json.dump(all_sections, f, indent=2, ensure_ascii=False)
+        futures = [executor.submit(extract_toc, m) for m in manuals_to_process]
 
-            print(f"✓ Saved {len(sections)} sections")
-        else:
-            print("→ No sections found")
+        for future in tqdm(as_completed(futures), total=len(futures)):
 
-        time.sleep(0.5)  # small delay to avoid rate limiting
+            manual, sections = future.result()
+
+            manual_name = f"{manual['model']} – {manual['manual_title']}"
+
+            if sections:
+                all_sections.extend(sections)
+                processed_manuals.add(manual_name)
+
+                with open(OUTPUT_FILE, "w") as f:
+                    json.dump(all_sections, f, indent=2, ensure_ascii=False)
+
+            time.sleep(0.1)
 
     print(f"\n✅ Finished. Total TOC sections: {len(all_sections)}")
 
@@ -126,13 +130,16 @@ def main(start_index: int):
 # CLI ENTRY
 # -----------------------------
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
         "--start",
         type=int,
         default=0,
         help="Start from nth manual index"
     )
+
     args = parser.parse_args()
 
     main(args.start)
