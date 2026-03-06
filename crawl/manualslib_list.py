@@ -108,7 +108,11 @@ def main(start_index: int):
 
         futures = [executor.submit(extract_toc, m) for m in manuals_to_process]
 
-        for future in tqdm(as_completed(futures), total=len(futures)):
+        for future in tqdm(
+        as_completed(futures),
+        total=total,
+        initial=start_index
+                ):
 
             manual, sections = future.result()
 
