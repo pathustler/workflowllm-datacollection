@@ -74,7 +74,7 @@ def extract_toc(manual):
 # -----------------------------
 # MAIN
 # -----------------------------
-def main(start_index: int):
+def main(start_index: int, max_workers: int):
 
     manuals = json.load(open("manualslib_all_manuals.json"))
     total = len(manuals)
@@ -104,7 +104,7 @@ def main(start_index: int):
         manuals_to_process.append(manual)
 
     # parallel scraping
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
 
         futures = [executor.submit(extract_toc, m) for m in manuals_to_process]
 
@@ -142,6 +142,12 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="Start from nth manual index"
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=3,
+        help="Number of concurrent workers for scraping"
     )
 
     args = parser.parse_args()
