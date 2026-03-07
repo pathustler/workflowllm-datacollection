@@ -1,7 +1,7 @@
 import requests
 
 
-url = "https://www.manualslib.com/manual/1386068/Abb-Tzidc-200.html"
+url = "https://www.manualslib.com/manual/2344470/Abb-Irb-6400r.html#product-IRB 6400R/2.8-200"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -18,5 +18,5 @@ PROXIES = {
     "https": PROXY
 }
 
-print(requests.get(url, headers=HEADERS, proxies=PROXIES).text[:100])
-print("Status Code:", requests.get(url, headers=HEADERS, proxies=PROXIES).status_code)
+
+print("Status Code:", requests.get(url, headers=HEADERS).status_code)
