@@ -6,7 +6,6 @@ from urllib.parse import urlparse, urlunparse
 import argparse
 import os
 import time
-import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -21,21 +20,10 @@ PROXIES = {
 }
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html",
+    "Accept-Language": "en-US,en;q=0.9"
 }
-
-# -----------------------------
-# Shared Session (connection reuse)
-# -----------------------------
-session = requests.Session()
-session.headers.update(HEADERS)
-
-adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
-session.mount("https://", adapter)
-session.mount("http://", adapter)
 
 
 # -----------------------------
@@ -50,21 +38,12 @@ def clean_manual_base_url(url: str):
 # TOC Extraction
 # -----------------------------
 def extract_toc(manual):
-
-    for attempt in range(5):  # retry logic
-        try:
-            r = session.get(
-                manual["manual_url"],
-                timeout=30,
-                proxies=PROXIES
-            )
-            r.raise_for_status()
-            break
-        except Exception:
-            if attempt == 4:
-                print(f"⚠️ Failed: {manual['manual_url']}")
-                return manual, []
-            time.sleep(2 ** attempt)  # exponential backoff
+    try:
+        r = requests.get(manual["manual_url"], timeout=30, headers=HEADERS)
+        r.raise_for_status()
+    except Exception:
+        print(f"⚠️ Failed: {manual['manual_url']}")
+        return manual, []
 
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -123,18 +102,16 @@ def main(start_index: int, max_workers: int):
 
         manuals_to_process.append(manual)
 
-    processed_count = 0
-
     # parallel scraping
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
 
         futures = [executor.submit(extract_toc, m) for m in manuals_to_process]
 
         for future in tqdm(
-            as_completed(futures),
-            total=total,
-            initial=start_index
-        ):
+        as_completed(futures),
+        total=total,
+        initial=start_index
+                ):
 
             manual, sections = future.result()
 
@@ -147,15 +124,7 @@ def main(start_index: int, max_workers: int):
                 with open(OUTPUT_FILE, "w") as f:
                     json.dump(all_sections, f, indent=2, ensure_ascii=False)
 
-            processed_count += 1
-
-            # random jitter delay
-            time.sleep(random.uniform(0.5, 1.5))
-
-            # periodic cooldown
-            if processed_count % 1000 == 0:
-                print("Cooling down for 60 seconds...")
-                time.sleep(60)
+            time.sleep(0.1)
 
     print(f"\n✅ Finished. Total TOC sections: {len(all_sections)}")
 
