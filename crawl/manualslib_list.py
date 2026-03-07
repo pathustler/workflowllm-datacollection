@@ -6,7 +6,6 @@ from urllib.parse import urlparse, urlunparse
 import argparse
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 BASE = "https://www.manualslib.com"
@@ -27,6 +26,19 @@ HEADERS = {
 
 
 # -----------------------------
+# Shared session
+# -----------------------------
+session = requests.Session()
+session.headers.update(HEADERS)
+
+# establish cookies
+try:
+    session.get(BASE, timeout=30, proxies=PROXIES)
+except:
+    pass
+
+
+# -----------------------------
 # URL Cleaner
 # -----------------------------
 def clean_manual_base_url(url: str):
@@ -38,19 +50,31 @@ def clean_manual_base_url(url: str):
 # TOC Extraction
 # -----------------------------
 def extract_toc(manual):
-    try:
-        r = requests.get(manual["manual_url"], timeout=30, headers=HEADERS)
-        r.raise_for_status()
-    except Exception:
-        print(f"⚠️ Failed: {manual['manual_url']}")
-        return manual, []
+
+    url = manual["manual_url"].split("#")[0]
+
+    for attempt in range(3):
+
+        try:
+            r = session.get(url, timeout=30, headers=HEADERS)
+            r.raise_for_status()
+            break
+
+        except Exception:
+
+            if attempt == 2:
+                print(f"⚠️ Failed: {url}")
+                return []
+
+            time.sleep(0.1)
 
     soup = BeautifulSoup(r.text, "html.parser")
 
-    base_url = clean_manual_base_url(manual["manual_url"])
+    base_url = clean_manual_base_url(url)
     sections = []
 
     for a in soup.select("a.ppp__caption__link"):
+
         title = a.get_text(strip=True)
         page = a.get("data-page")
 
@@ -67,66 +91,50 @@ def extract_toc(manual):
             "manual_title": manual["manual_title"],
         })
 
-    return manual, sections
+    return sections
 
 
 # -----------------------------
 # MAIN
 # -----------------------------
-def main(start_index: int, max_workers: int):
+def main(start_index: int):
 
     manuals = json.load(open("manualslib_all_manuals.json"))
     total = len(manuals)
 
-    if os.path.exists(OUTPUT_FILE):
-        with open(OUTPUT_FILE) as f:
-            all_sections = json.load(f)
-        print(f"✓ Loaded {len(all_sections)} existing TOC entries")
-    else:
-        all_sections = []
+    processed_manuals = set()
 
-    processed_manuals = set(
-        s["manual_name"] for s in all_sections
-    )
+    if os.path.exists(OUTPUT_FILE):
+
+        with open(OUTPUT_FILE) as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                    processed_manuals.add(obj["manual_name"])
+                except:
+                    pass
 
     print(f"Starting from manual index: {start_index}")
 
-    manuals_to_process = []
+    for idx in tqdm(range(start_index, total), initial=start_index, total=total):
 
-    for idx in range(start_index, total):
         manual = manuals[idx]
         manual_name = f"{manual['model']} – {manual['manual_title']}"
 
         if manual_name in processed_manuals:
             continue
 
-        manuals_to_process.append(manual)
+        sections = extract_toc(manual)
 
-    # parallel scraping
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        if sections:
+            with open(OUTPUT_FILE, "a") as f:
+                for s in sections:
+                    f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
-        futures = [executor.submit(extract_toc, m) for m in manuals_to_process]
+        time.sleep(0.1)   # slower but much safer
 
-        for future in tqdm(
-        as_completed(futures),
-        total=total,
-        initial=start_index
-                ):
 
-            manual, sections = future.result()
-
-            manual_name = f"{manual['model']} – {manual['manual_title']}"
-
-            if sections:
-                all_sections.extend(sections)
-                processed_manuals.add(manual_name)
-
-                with open(OUTPUT_FILE, "w") as f:
-                    json.dump(all_sections, f, indent=2, ensure_ascii=False)
-
-            time.sleep(0.1)
-
-    print(f"\n✅ Finished. Total TOC sections: {len(all_sections)}")
+    print("Finished.")
 
 
 # -----------------------------
@@ -142,13 +150,7 @@ if __name__ == "__main__":
         default=0,
         help="Start from nth manual index"
     )
-    parser.add_argument(
-        "--max-workers",
-        type=int,
-        default=3,
-        help="Number of concurrent workers for scraping"
-    )
 
     args = parser.parse_args()
 
-    main(args.start, args.max_workers)
+    main(args.start)
