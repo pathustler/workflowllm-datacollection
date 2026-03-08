@@ -9,7 +9,7 @@ import time
 
 
 BASE = "https://www.manualslib.com"
-OUTPUT_FILE = "portable_generator_toc_sections.jsonl"
+OUTPUT_FILE = "portable_generator_toc_sections.json"
 
 
 HEADERS = {
