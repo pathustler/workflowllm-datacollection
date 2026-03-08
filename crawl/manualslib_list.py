@@ -9,14 +9,8 @@ import time
 
 
 BASE = "https://www.manualslib.com"
-OUTPUT_FILE = "portable_generator_toc_sections.json"
+OUTPUT_FILE = "portable_generator_toc_sections.jsonl"
 
-PROXY = "http://adgkwbzb:43oaua4v9w5g@31.59.20.176:6754"
-
-PROXIES = {
-    "http": PROXY,
-    "https": PROXY
-}
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -26,14 +20,14 @@ HEADERS = {
 
 
 # -----------------------------
-# Shared session
+# Shared Session
 # -----------------------------
 session = requests.Session()
 session.headers.update(HEADERS)
 
 # establish cookies
 try:
-    session.get(BASE, timeout=30, proxies=PROXIES)
+    session.get(BASE, timeout=30)
 except:
     pass
 
@@ -51,13 +45,18 @@ def clean_manual_base_url(url: str):
 # -----------------------------
 def extract_toc(manual):
 
-    url = manual["manual_url"].split("#")[0]
+    url = clean_manual_base_url(manual["manual_url"])
 
     for attempt in range(3):
 
         try:
-            r = session.get(url, timeout=30, headers=HEADERS)
+            r = session.get(url, timeout=30)
             r.raise_for_status()
+
+            # Sometimes ManualsLib returns placeholder pages
+            if "ppp__caption__link" not in r.text:
+                return []
+
             break
 
         except Exception:
@@ -66,11 +65,10 @@ def extract_toc(manual):
                 print(f"⚠️ Failed: {url}")
                 return []
 
-            time.sleep(0.1)
+            time.sleep(2 ** attempt)
 
     soup = BeautifulSoup(r.text, "html.parser")
 
-    base_url = clean_manual_base_url(url)
     sections = []
 
     for a in soup.select("a.ppp__caption__link"):
@@ -83,7 +81,7 @@ def extract_toc(manual):
 
         sections.append({
             "title": title,
-            "source_url": f"{base_url}?page={page}#manual",
+            "source_url": f"{url}?page={page}#manual",
             "manual_name": f"{manual['model']} – {manual['manual_title']}",
             "brand": manual["brand"],
             "product": manual["product"],
@@ -116,7 +114,7 @@ def main(start_index: int):
 
     print(f"Starting from manual index: {start_index}")
 
-    for idx in tqdm(range(start_index, total), initial=start_index, total=total):
+    for idx in tqdm(range(start_index, total), total=total, initial=start_index):
 
         manual = manuals[idx]
         manual_name = f"{manual['model']} – {manual['manual_title']}"
@@ -127,11 +125,14 @@ def main(start_index: int):
         sections = extract_toc(manual)
 
         if sections:
+
             with open(OUTPUT_FILE, "a") as f:
+
                 for s in sections:
                     f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
-        time.sleep(0.1)   # slower but much safer
+        # polite delay
+        time.sleep(1)
 
 
     print("Finished.")
