@@ -129,7 +129,7 @@ def main(start_index: int):
             with open(OUTPUT_FILE, "a") as f:
 
                 for s in sections:
-                    f.write(json.dumps(s, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(s, ensure_ascii=False) + ",\n")
 
         # polite delay
         time.sleep(1)
