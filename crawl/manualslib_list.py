@@ -95,26 +95,33 @@ def extract_toc(manual):
 # -----------------------------
 # MAIN
 # -----------------------------
-def main(start_index: int):
+def main(start_index: int, end_index: int, output_file: str):
 
     manuals = json.load(open("manualslib_all_manuals.json"))
     total = len(manuals)
 
     processed_manuals = set()
 
-    if os.path.exists(OUTPUT_FILE):
+    # create JSON file if not exists
+    if not os.path.exists(output_file):
+        with open(output_file, "w") as f:
+            f.write("[\n")
 
-        with open(OUTPUT_FILE) as f:
+    if os.path.exists(output_file):
+
+        with open(output_file) as f:
             for line in f:
                 try:
-                    obj = json.loads(line)
+                    obj = json.loads(line.rstrip(",\n"))
                     processed_manuals.add(obj["manual_name"])
                 except:
                     pass
 
     print(f"Starting from manual index: {start_index}")
 
-    for idx in tqdm(range(start_index, total), total=total, initial=start_index):
+    end_index = min(end_index, total)
+
+    for idx in tqdm(range(start_index, end_index), total=end_index, initial=start_index):
 
         manual = manuals[idx]
         manual_name = f"{manual['model']} – {manual['manual_title']}"
@@ -126,7 +133,7 @@ def main(start_index: int):
 
         if sections:
 
-            with open(OUTPUT_FILE, "a") as f:
+            with open(output_file, "a") as f:
 
                 for s in sections:
                     f.write(json.dumps(s, ensure_ascii=False) + ",\n")
@@ -134,6 +141,11 @@ def main(start_index: int):
         # polite delay
         time.sleep(1)
 
+    # close JSON array properly
+    with open(output_file, "rb+") as f:
+        f.seek(-2, os.SEEK_END)
+        f.truncate()
+        f.write(b"\n]")
 
     print("Finished.")
 
@@ -152,6 +164,20 @@ if __name__ == "__main__":
         help="Start from nth manual index"
     )
 
+    parser.add_argument(
+        "--end",
+        type=int,
+        default=999999999,
+        help="Stop at nth manual index"
+    )
+
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=OUTPUT_FILE,
+        help="Output JSON file"
+    )
+
     args = parser.parse_args()
 
-    main(args.start)
+    main(args.start, args.end, args.output)
