@@ -58,3 +58,17 @@ This script scrapes ManualsLib for publicly available manual sections and saves 
 python3 expand/manualslib_expand.py
 ```
 This script processes the collected pdf data, extracts actionable workflows, and saves them to `portable_generator_workflows.json`.
+
+
+
+
+# MARINE
+The MARINE dataset is a collection of 100 real-world automation workflows extracted from ManualsLib. 
+Python files
+- `crawl/collect_marine.py`: Contains the code to crawl ManualsLib and extract workflow metadata.
+- `expand/marine_expand.py`: Contains the code to process the collected metadata, extract actionable workflows, and save them in a structured format.
+
+JSON Files
+- `abb_marine_manuals.json`: Contains all manual links and metadata collected from ManualsLib.
+- `marine_workflows.json`: Contains the 100 extracted automation workflows, including their steps and metadata.
+- `marine_workflows_cleaned.json`: A cleaned version of the workflows, with non-actionable steps removed and standardized formatting.

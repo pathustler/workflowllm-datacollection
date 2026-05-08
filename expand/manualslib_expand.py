@@ -84,7 +84,9 @@ def main(start_index: int):
 
     global successful_screenshots
 
-    with open("portable_generator_toc_sections.json") as f:
+    # with open("portable_generator_toc_sections.json") as f:
+    #     toc_entries = json.load(f)
+    with open("testurl.json") as f:
         toc_entries = json.load(f)
 
     toc_entries = toc_entries[start_index:]
@@ -178,7 +180,7 @@ def main(start_index: int):
                 # 🔥 Batch save (critical for performance)
                 if i % SAVE_BATCH == 0:
                     with open(OUTPUT_FILE, "w") as f:
-                        json.dump(workflows, f)
+                        json.dump(workflows, f, indent=2)
 
             except KeyboardInterrupt:
                 print("\nInterrupted by user. Saving progress...")
@@ -189,7 +191,7 @@ def main(start_index: int):
         browser.close()
 
     with open(OUTPUT_FILE, "w") as f:
-        json.dump(workflows, f)
+        json.dump(workflows, f, indent=2)
 
     print(f"\nDone. Screenshots saved: {successful_screenshots}")
 
