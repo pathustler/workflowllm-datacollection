@@ -86,8 +86,8 @@ def main(start_index: int):
 
     # with open("portable_generator_toc_sections.json") as f:
     #     toc_entries = json.load(f)
-    with open("testurl.json") as f:
-        toc_entries = json.load(f)
+    with open("portable_generator_toc_sections.json") as f:
+        toc_entries = json.load(f)[:10]
 
     toc_entries = toc_entries[start_index:]
 

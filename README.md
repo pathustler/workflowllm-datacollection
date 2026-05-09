@@ -1,74 +1,169 @@
 # WorkflowLLM – Data Generation Pipeline
 
-This repository implements the **data generation pipeline** described in the WorkflowLLM paper.  
-The goal is to transform real-world automation metadata into a **hierarchically supervised dataset**
-for training large language models on workflow reasoning.
-
-The pipeline is intentionally modular and mirrors the paper’s stages:
-1. Metadata collection (crawling)
-2. Synthetic workflow generation
-3. Validation, enrichment, and dataset construction
-
-This README documents **Stage 1 only**: data collection.
+Transforms real-world technical manual content into structured workflow datasets for training LLMs on procedural reasoning.
 
 ---
 
-## Repository Structure (Relevant Parts)
+## Prerequisites
 
-WorkflowLLM/
-├── crawl/
-│ ├── crawl_routinehub.py
-│ └── crawl_shortcut_detail.py
-├── generate/
-├── enrich/
-├── filter/
-├── expand/
-├── dataset/
-├── utils/
-├── raw_shortcuts.json
-├── shortcuts_enriched.json
-└── run_pipeline.py
+Python 3.12.7+ required.
 
-
-## Stage 0: Prerequisites
-
-Python 3.12.7 or higher is required.
-
-```
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
-
 pip install -r requirements.txt
 ```
 
+Playwright also needs its browser binary:
 
-## Stage 1: Data Collection (Crawling)
+```bash
+playwright install chromium
+```
 
-The crawler collects **automation task metadata** from RoutineHub.
-Due to paywalls, most workflows are not downloadable; this is expected and handled later via synthesis.
+Set your OpenAI key in a `.env` file (required for QA generation only):
 
 ```
+OPENAI_API_KEY=sk-...
+```
+
+---
+
+## Repository Structure
+
+```
+WorkflowLLM/
+├── crawl/                        # Stage 1 – collect manual metadata
+│   ├── collect_manuals.py        # crawl all ManualsLib brands/products/models
+│   ├── manualslib_list.py        # extract TOC sections from each manual
+│   └── collect_marine.py         # targeted crawl for ABB Marine Equipment
+├── expand/                       # Stage 2 – extract workflow steps
+│   ├── manualslib_expand.py      # Playwright-based extractor (local use)
+│   ├── manualslib_expand_seq.py  # HTTP-based extractor (server/HPC use)
+│   ├── expand_marine.py          # full-manual extractor for MARINE dataset
+│   └── ss_marine.py              # screenshot tool for MARINE manuals
+├── qa/                           # QA pair generation
+│   └── qa_gen.py
+├── generate/                     # (not yet implemented)
+├── enrich/                       # (not yet implemented)
+├── filter/                       # (not yet implemented)
+├── dataset/                      # (not yet implemented)
+└── utils/
+    └── llm.py
+```
+
+---
+
+## Dataset 1 – Portable Generator Workflows
+
+Step-by-step procedures extracted from portable generator manuals on ManualsLib.
+
+**Output:** `portable_generator_workflows.json`
+
+### Step 1 — Crawl all manuals
+
+```bash
 python3 crawl/collect_manuals.py
+```
+
+Walks the ManualsLib brand → product → model hierarchy and saves all manual URLs.
+
+**Produces:** `manualslib_all_manuals.json`
+
+### Step 2 — Extract table of contents sections
+
+```bash
 python3 crawl/manualslib_list.py
 ```
 
-This script scrapes ManualsLib for publicly available manual sections and saves the metadata to `portable_generator_toc_sections.json`.
+For each manual, fetches its TOC and saves each section as a separate entry with a direct page URL.
 
+**Produces:** `portable_generator_toc_sections.json`
 
-```
+### Step 3 — Extract workflow steps
+
+Choose one extractor depending on your environment:
+
+**Local (uses Playwright/Chromium):**
+```bash
 python3 expand/manualslib_expand.py
+# Resume from a specific index if interrupted:
+python3 expand/manualslib_expand.py --start 500
 ```
-This script processes the collected pdf data, extracts actionable workflows, and saves them to `portable_generator_workflows.json`.
 
+**Server / HPC (uses requests + threading, no browser needed):**
+```bash
+python3 expand/manualslib_expand_seq.py
+python3 expand/manualslib_expand_seq.py --start 500
+```
 
+Both render each manual page, parse the PDF viewer HTML, sort text blocks by position, and filter out headers and noise.
 
+**Produces:** `portable_generator_workflows.json`
 
-# MARINE
-The MARINE dataset is a collection of 100 real-world automation workflows extracted from ManualsLib. 
-Python files
-- `crawl/collect_marine.py`: Contains the code to crawl ManualsLib and extract workflow metadata.
-- `expand/marine_expand.py`: Contains the code to process the collected metadata, extract actionable workflows, and save them in a structured format.
+---
 
-JSON Files
-- `abb_marine_manuals.json`: Contains all manual links and metadata collected from ManualsLib.
-- `marine_workflows.json`: Contains the 100 extracted automation workflows, including their steps and metadata.
-- `marine_workflows_cleaned.json`: A cleaned version of the workflows, with non-actionable steps removed and standardized formatting.
+## Dataset 2 – MARINE
+
+100 real-world automation workflows extracted from ABB Marine Equipment manuals on ManualsLib.
+
+**Output:** `marine_workflows.json`
+
+### Step 1 — Crawl ABB Marine manuals
+
+```bash
+python3 crawl/collect_marine.py
+```
+
+**Produces:** `abb_marine_manuals.json`
+
+### Step 2 — Extract workflow steps
+
+```bash
+python3 expand/expand_marine.py
+# Resume from a specific index if interrupted:
+python3 expand/expand_marine.py --start 20
+```
+
+Paginates through each full manual (up to 300 pages), handles both PDF-viewer and HTML-rendered pages.
+
+**Produces:** `marine_workflows.json`
+
+### (Optional) Screenshot each manual page
+
+```bash
+python3 expand/ss_marine.py
+```
+
+Captures page-by-page JPEG screenshots of the first 100 manuals.
+
+**Produces:** `ABB_Marine_Screenshots/<model>/<manual>_page_N.jpg`
+
+---
+
+## QA Pair Generation
+
+Generates question-answer pairs from any extracted workflow dataset using GPT-4o-mini.
+
+```bash
+python3 qa/qa_gen.py
+```
+
+Reads from `portable_generator_workflows.json` by default. Edit `INPUT_FILE` at the top of the script to point at a different source (e.g. `marine_workflows.json`).
+
+Produces 3–5 QA pairs per workflow chunk (procedural, reasoning, and edge-case questions).
+
+**Produces:** `qa_output.json`
+
+---
+
+## Output Files Reference
+
+| File | Description |
+|---|---|
+| `manualslib_all_manuals.json` | All ManualsLib manual URLs and metadata |
+| `portable_generator_toc_sections.json` | Individual TOC section entries with page URLs |
+| `portable_generator_workflows.json` | Extracted workflow steps (portable generator manuals) |
+| `abb_marine_manuals.json` | ABB Marine Equipment manual URLs and metadata |
+| `marine_workflows.json` | Extracted workflow steps (MARINE dataset) |
+| `marine_workflows_cleaned.json` | Cleaned MARINE workflows (non-actionable steps removed) |
+| `qa_output.json` | Generated QA pairs |
